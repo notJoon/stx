@@ -1,0 +1,7 @@
+[tools]
+python = "3.14.6"
+uv = "0.9.5"
+
+[tasks.test]
+description = "Run pytest"
+run = "uv run --with pytest pytest -q"
