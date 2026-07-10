@@ -1,0 +1,9 @@
+{
+  "tasks": {
+    "check": "deno check src/wasm.ts test/wasm_test.ts",
+    "test": "deno test"
+  },
+  "fmt": {
+    "lineWidth": 100
+  }
+}
