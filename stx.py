@@ -20,6 +20,12 @@ class Node:
 
 
 @dataclass(frozen=True)
+class ComparisonUnit:
+    node: Node
+    field: str | None = None
+
+
+@dataclass(frozen=True)
 class Single:
     node: Node
 
@@ -61,22 +67,25 @@ def source_text(src, x):
 
 
 def units(node):
-    return tuple(c for c in node.children if c.kind != ",")
+    return tuple(ComparisonUnit(c, c.field_name) for c in node.children if c.kind != ",")
 
 
 def unwrap(node):
-    return units(node)[0]
+    return units(node)[0].node
 
 
 def is_single_meta(node):
+    node = as_unit(node).node
     return node.meta is not None and node.meta.startswith("$") and not node.meta.startswith("$$$")
 
 
 def is_variadic(node):
+    node = as_unit(node).node
     return node.meta is not None and node.meta.startswith("$$$")
 
 
 def visible_name(node):
+    node = as_unit(node).node
     return node.meta.lstrip("$")
 
 
@@ -103,7 +112,21 @@ def MatchNode(p, t, B, src, transparent_nodes=("parenthesized_expression",)):
         return None
     if len(units(p)) == 0:
         return B if source_text(src, p) == source_text(src, t) else None
-    return MatchSeq(units(p), units(t), B, src)
+    return MatchSeq(units(p), units(t), B, src, t)
+
+
+def MatchUnit(pu, tu, B, src):
+    pu = as_unit(pu)
+    tu = as_unit(tu)
+    if pu.field != tu.field:
+        return None
+    return MatchNode(pu.node, tu.node, B, src)
+
+
+def as_unit(x):
+    if isinstance(x, ComparisonUnit):
+        return x
+    return ComparisonUnit(x, x.field_name)
 
 
 def split_segments(ps):
@@ -127,19 +150,17 @@ def reject_adjacent_variadics(ps):
             raise ValueError("adjacent variadic")
 
 
-def field_matches(p, t):
-    return p.field_name == t.field_name
-
-
 def MatchSeq(ps, ts, B, src, parent=None):
+    ps = tuple(as_unit(p) for p in ps)
+    ts = tuple(as_unit(t) for t in ts)
     reject_adjacent_variadics(ps)
     F0, pairs = split_segments(ps)
     i = 0
 
     for p in F0:
-        if i >= len(ts) or not field_matches(p, ts[i]):
+        if i >= len(ts):
             return None
-        B = MatchNode(p, ts[i], B, src)
+        B = MatchUnit(p, ts[i], B, src)
         if B is None:
             return None
         i += 1
@@ -162,9 +183,7 @@ def MatchSeq(ps, ts, B, src, parent=None):
             if B is None:
                 return None
             for p in Fj:
-                if not field_matches(p, ts[s]):
-                    return None
-                B = MatchNode(p, ts[s], B, src)
+                B = MatchUnit(p, ts[s], B, src)
                 if B is None:
                     return None
                 s += 1
@@ -178,27 +197,26 @@ def AnchorMatches(F, ts, s, B, src):
         return False
     C = dict(B)
     for m, p in enumerate(F):
-        if not field_matches(p, ts[s + m]):
-            return False
-        C = MatchNode(p, ts[s + m], C, src)
+        C = MatchUnit(p, ts[s + m], C, src)
         if C is None:
             return False
     return True
 
 
 def bind_variadic(V, ts, i, s, B, src, parent=None):
+    V = as_unit(V).node
+    nodes = tuple(t.node for t in ts[i:s])
     if V.meta == "$$$_":
         return B
-    nodes = ts[i:s]
     span = Range(nodes[0].start, nodes[-1].end) if nodes else empty_span(ts, i, s, parent)
-    return bind(visible_name(V), Multi(tuple(nodes), span), B, src)
+    return bind(visible_name(V), Multi(nodes, span), B, src)
 
 
 def empty_span(ts, i, s, parent=None):
     if s < len(ts):
-        return Range(ts[s].start, ts[s].start)
+        return Range(ts[s].node.start, ts[s].node.start)
     if i > 0:
-        return Range(ts[i - 1].end, ts[i - 1].end)
+        return Range(ts[i - 1].node.end, ts[i - 1].node.end)
     if parent is not None and parent.raw_children:
         d = parent.raw_children[0]
         return Range(d.end, d.end)

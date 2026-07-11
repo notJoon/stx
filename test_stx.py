@@ -1,8 +1,10 @@
 import pytest
 
 from stx import (
+    ComparisonUnit,
     Fix,
     MatchNode,
+    MatchUnit,
     MatchSeq,
     Multi,
     Node,
@@ -106,6 +108,14 @@ def test_field_name_mismatch_fails_fixed_segment_but_not_variadic_absorption():
     B = MatchSeq((mv("$$$A"), leaf("c", field_name="right")), (a, b, c), {}, src)
 
     assert [n.field_name for n in B["A"].nodes] == ["left", "middle"]
+
+
+def test_match_unit_compares_field_label_before_node():
+    src = "x"
+    p = ComparisonUnit(leaf("x", field_name="left"), "left")
+    t = ComparisonUnit(leaf("x", field_name="right"), "right")
+
+    assert MatchUnit(p, t, {}, src) is None
 
 
 def test_half_open_overlap_and_same_point_insertions_overlap():
