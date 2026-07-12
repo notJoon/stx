@@ -9,11 +9,11 @@ run = "uv run --with pytest pytest -q"
 
 [tasks.test-deno]
 description = "Run Deno tests"
-run = "deno test"
+run = "deno task test"
 
 [tasks.check-deno]
 description = "Type-check Deno code"
-run = "deno check src/wasm.ts test/wasm_test.ts"
+run = "deno task check"
 
 [tasks.test]
 description = "Run all tests"

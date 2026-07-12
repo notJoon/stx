@@ -1,9 +1,13 @@
 {
   "tasks": {
-    "check": "deno check src/wasm.ts test/wasm_test.ts",
-    "test": "deno test"
+    "check": "deno check src/wasm.ts src/grammar.ts src/source_file.ts test/wasm_test.ts test/grammar_test.ts test/source_file_test.ts",
+    "test": "deno test --allow-read"
   },
   "fmt": {
     "lineWidth": 100
+  },
+  "imports": {
+    "web-tree-sitter": "npm:web-tree-sitter@0.25.10",
+    "tree-sitter-wasms/package.json": "npm:tree-sitter-wasms@0.1.13/package.json"
   }
 }

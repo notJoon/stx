@@ -1,0 +1,21 @@
+{
+  "version": "5",
+  "specifiers": {
+    "npm:tree-sitter-wasms@0.1.13": "0.1.13",
+    "npm:web-tree-sitter@0.25.10": "0.25.10"
+  },
+  "npm": {
+    "tree-sitter-wasms@0.1.13": {
+      "integrity": "sha512-wT+cR6DwaIz80/vho3AvSF0N4txuNx/5bcRKoXouOfClpxh/qqrF4URNLQXbbt8MaAxeksZcZd1j8gcGjc+QxQ=="
+    },
+    "web-tree-sitter@0.25.10": {
+      "integrity": "sha512-Y09sF44/13XvgVKgO2cNDw5rGk6s26MgoZPXLESvMXeefBf7i6/73eFurre0IsTW6E14Y0ArIzhUMmjoc7xyzA=="
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "npm:tree-sitter-wasms@0.1.13",
+      "npm:web-tree-sitter@0.25.10"
+    ]
+  }
+}
