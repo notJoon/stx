@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "check": "deno check src/wasm.ts src/grammar.ts src/source_file.ts test/wasm_test.ts test/grammar_test.ts test/source_file_test.ts",
+    "check": "deno check src test",
     "test": "deno test --allow-read"
   },
   "fmt": {
