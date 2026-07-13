@@ -21,11 +21,13 @@ export type LanguageSemantics = {
 };
 
 const EMPTY_OVERRIDES = Object.freeze({});
+// TypeScript string quote tokens are anonymous, but quote spelling is significant.
+const TYPESCRIPT_OVERRIDES = Object.freeze({ '"': true, "'": true });
 const TRANSPARENT_NODE_TYPES = new Set(["parenthesized_expression"]);
 
 export const LANGUAGE_SEMANTICS: Readonly<Record<LanguageId, LanguageSemantics>> = {
   typescript: {
-    comparison_unit_overrides: EMPTY_OVERRIDES,
+    comparison_unit_overrides: TYPESCRIPT_OVERRIDES,
     transparent_nodes: TRANSPARENT_NODE_TYPES,
     comment_tokens: ["//", "/*"],
   },
