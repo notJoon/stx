@@ -1,0 +1,7 @@
+version: 1
+id: smoke/variadic
+language: typescript
+severity: warn
+message: f call
+rule:
+  pattern: f($$$ARGS)

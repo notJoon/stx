@@ -1,0 +1,9 @@
+version: 1
+id: smoke/python-if
+language: python
+severity: info
+message: if statement
+rule:
+  pattern: |
+    if $COND:
+      $$$BODY
