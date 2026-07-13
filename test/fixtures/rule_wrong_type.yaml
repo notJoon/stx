@@ -1,0 +1,7 @@
+version: 1
+id: 42
+language: typescript
+severity: warn
+message: wrong type
+rule:
+  pattern: console.log($ARG)

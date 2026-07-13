@@ -1,0 +1,7 @@
+version: 1
+id: smoke/kind
+language: typescript
+severity: warn
+message: unsupported combinator
+rule:
+  kind: call_expression

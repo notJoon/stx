@@ -1,0 +1,7 @@
+version: 1
+id: smoke/console-log
+language: typescript
+severity: warn
+message: console.log call
+rule:
+  pattern: console.log($ARG)

@@ -1,8 +1,15 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@std/yaml@*": "1.0.8",
+    "jsr:@std/yaml@1.0.8": "1.0.8",
     "npm:tree-sitter-wasms@0.1.13": "0.1.13",
     "npm:web-tree-sitter@0.25.10": "0.25.10"
+  },
+  "jsr": {
+    "@std/yaml@1.0.8": {
+      "integrity": "90b8aab62995e929fa0ea5f4151c287275b63e321ac375c35ff7406ca60c169d"
+    }
   },
   "npm": {
     "tree-sitter-wasms@0.1.13": {
@@ -14,6 +21,7 @@
   },
   "workspace": {
     "dependencies": [
+      "jsr:@std/yaml@1.0.8",
       "npm:tree-sitter-wasms@0.1.13",
       "npm:web-tree-sitter@0.25.10"
     ]

@@ -1,0 +1,7 @@
+version: 1
+id: smoke/javascript
+language: javascript
+severity: warn
+message: unsupported language
+rule:
+  pattern: console.log($ARG)
