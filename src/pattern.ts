@@ -40,10 +40,10 @@ export async function compilePattern(
     throw new CompileError(`pattern parse error: ${problem.type}`);
   }
 
-  const metavars = restoreMetavars(source.tree.rootNode, replaced.occurrences);
   const root = opts.selector
     ? selectRoot(source.tree.rootNode, opts.selector)
     : selectSingleRoot(source.tree.rootNode, lang);
+  const metavars = restoreMetavars(source.tree.rootNode, root, replaced.occurrences);
 
   if (opts.selector) {
     for (const id of metavars.keys()) {
@@ -163,7 +163,7 @@ function nextAvailablePlaceholder(
   }
 }
 
-function restoreMetavars(root: Node, occurrences: Occurrence[]) {
+function restoreMetavars(root: Node, patternRoot: Node, occurrences: Occurrence[]) {
   const metavars = new Map<number, Metavariable>();
   for (const occ of occurrences) {
     // Whole-token check: the smallest covering node must exactly match the occurrence.
@@ -172,10 +172,10 @@ function restoreMetavars(root: Node, occurrences: Occurrence[]) {
     if (node.startIndex !== occ.start || node.endIndex !== occ.end) {
       throw new CompileError("metavariable must occupy a whole token");
     }
-    // Restore by climbing equal-range ancestors, stopping before the file root.
+    // Restore by climbing equal-range ancestors, stopping at the pattern root.
     while (
       node.parent &&
-      node.parent.id !== root.id &&
+      node.id !== patternRoot.id &&
       node.parent.startIndex === occ.start &&
       node.parent.endIndex === occ.end
     ) {
@@ -200,11 +200,16 @@ function smallestCovering(root: Node, start: number, end: number): Node {
 }
 
 function selectSingleRoot(root: Node, lang: LanguageId): Node {
-  const rootUnits = units(root, semanticsFor(lang));
+  const semantics = semanticsFor(lang);
+  const rootUnits = units(root, semantics);
   if (rootUnits.length !== 1) {
     throw new CompileError(`pattern must have exactly one root node, got ${rootUnits.length}`);
   }
-  return rootUnits[0].node;
+  const selected = rootUnits[0].node;
+  if (selected.type !== "expression_statement") return selected;
+
+  const expressionUnits = units(selected, semantics);
+  return expressionUnits.length === 1 ? expressionUnits[0].node : selected;
 }
 
 function selectRoot(root: Node, selector: string): Node {

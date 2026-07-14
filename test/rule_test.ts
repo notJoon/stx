@@ -32,14 +32,14 @@ Deno.test("loads a YAML pattern rule and matches a real TypeScript file", async 
   );
   assertEquals(matches.length, 3);
   assertEquals(matches.map(({ root }) => root), [
-    { start: 0, end: 47 },
-    { start: 22, end: 43 },
-    { start: 74, end: 96 },
+    { start: 0, end: 46 },
+    { start: 22, end: 42 },
+    { start: 74, end: 95 },
   ]);
   assertEquals(matches.map(({ root }) => source.sourceText(root)), [
-    'console.log(() => {\n  console.log("first");\n});',
-    'console.log("first");',
-    'console.log("second");',
+    'console.log(() => {\n  console.log("first");\n})',
+    'console.log("first")',
+    'console.log("second")',
   ]);
   assertEquals(
     matches.map(({ captures }) => {
@@ -67,8 +67,8 @@ Deno.test("reports UTF-8 byte ranges through the YAML smoke path", async () => {
   if (!match || !capture || capture.kind !== "single") throw new Error("missing ARG capture");
 
   const captureRange = source.rangeOf(capture.node);
-  assertEquals(match.root, { start: 28, end: 51 });
-  assertEquals(source.sourceText(match.root), 'console.log("값🙂");');
+  assertEquals(match.root, { start: 28, end: 50 });
+  assertEquals(source.sourceText(match.root), 'console.log("값🙂")');
   assertEquals(captureRange, { start: 40, end: 49 });
   assertEquals(source.sourceText(captureRange), '"값🙂"');
 });
@@ -115,7 +115,7 @@ Deno.test("loads variadic captures with zero, one, and many nodes", async () => 
   );
   const matches = findMatches(rule.pattern, source);
 
-  assertEquals(matches.map(({ root }) => source.sourceText(root)), ["f();", "f(a);", "f(a, b);"]);
+  assertEquals(matches.map(({ root }) => source.sourceText(root)), ["f()", "f(a)", "f(a, b)"]);
   assertEquals(
     matches.map(({ captures }) => {
       const capture = captures.get("ARGS");

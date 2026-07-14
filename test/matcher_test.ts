@@ -28,6 +28,44 @@ Deno.test("matches single metavariables and captures the target node", async () 
   }
 });
 
+Deno.test("matches TypeScript expression patterns inside larger expressions", async () => {
+  const parse = await compilePattern("JSON.parse($X)", "typescript");
+  const declaration = await SourceFile.parse("typescript", "const x = JSON.parse(y)");
+  const [parseMatch] = findMatches(parse, declaration);
+  assert(parseMatch);
+  assertEquals(singleText(declaration, parseMatch, "X"), "y");
+
+  const error = await compilePattern("new Error($MSG)", "typescript");
+  const target = await SourceFile.parse(
+    "typescript",
+    'throw new Error("x"); const make = (message) => new Error(message)',
+  );
+  const matches = findMatches(error, target);
+  assertEquals(matches.length, 2);
+  assertEquals(matches.map((match) => singleText(target, match, "MSG")), ['"x"', "message"]);
+});
+
+Deno.test("matches Python expression patterns in conditions", async () => {
+  const pattern = await compilePattern("isinstance($X, $T)", "python");
+  const target = await SourceFile.parse("python", "if isinstance(v, str):\n  pass\n");
+  const [match] = findMatches(pattern, target);
+
+  assert(match);
+  assertEquals(singleText(target, match, "X"), "v");
+  assertEquals(singleText(target, match, "T"), "str");
+});
+
+Deno.test("still matches expression patterns used as statements", async () => {
+  for (const lang of LANGUAGES) {
+    const pattern = await compilePattern("f($X)", lang);
+    const target = await SourceFile.parse(lang, "f(value)");
+    const [match] = findMatches(pattern, target);
+
+    assert(match);
+    assertEquals(singleText(target, match, "X"), "value");
+  }
+});
+
 Deno.test("uses lazy variadic matching and lets the final variadic absorb the rest", async () => {
   for (const lang of LANGUAGES) {
     const pattern = await compilePattern("f($$$A, x, $$$B)", lang);

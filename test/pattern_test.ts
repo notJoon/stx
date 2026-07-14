@@ -22,10 +22,27 @@ Deno.test("compiles basic call patterns in TypeScript and Python", async () => {
   for (const lang of LANGUAGES) {
     const pattern = await compilePattern("console.log($MSG)", lang);
 
-    assertEquals(pattern.root.type, "expression_statement");
+    assertEquals(pattern.root.type, lang === "typescript" ? "call_expression" : "call");
     assertEquals(metas(pattern).map((entry) => [entry.node.type, entry.meta]), [
       ["identifier", { name: "MSG", variadic: false }],
     ]);
+  }
+});
+
+Deno.test("demotes single expression-statement roots once", async () => {
+  assertEquals((await compilePattern("JSON.parse($X)", "typescript")).root.type, "call_expression");
+  assertEquals((await compilePattern("len($X)", "python")).root.type, "call");
+
+  const notDemoted = await compilePattern("a /* comment */", "typescript");
+  assertEquals(notDemoted.root.type, "expression_statement");
+});
+
+Deno.test("restores a standalone metavariable to the demoted pattern root", async () => {
+  for (const lang of LANGUAGES) {
+    const pattern = await compilePattern("$X", lang);
+
+    assertEquals(metas(pattern).map((entry) => entry.node.id), [pattern.root.id]);
+    assertEquals(pattern.metavars.get(pattern.root.id), { name: "X", variadic: false });
   }
 });
 
@@ -85,8 +102,11 @@ Deno.test("rejects invalid prefix run lengths", async () => {
 });
 
 Deno.test("rejects partial tokens in comments", async () => {
-  await assertCompileError(() => compilePattern("// pre $X\n1", "typescript"), "whole token");
-  await assertCompileError(() => compilePattern("# pre $X\n1", "python"), "whole token");
+  await assertCompileError(() => compilePattern("1 /* pre $X */", "typescript"), "whole token");
+  await assertCompileError(
+    () => compilePattern("def f():\n  # pre $X\n  pass", "python"),
+    "whole token",
+  );
 });
 
 Deno.test("consumes blocked prefix runs entirely", async () => {
