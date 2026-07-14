@@ -10,8 +10,8 @@ reference implementation. First used for the Phase 4 matcher evaluation
 deno task bench
 ```
 
-Requirements: `git` and `npx` on PATH (ast-grep runs via `npx @ast-grep/cli`, cached by npm). On the
-first run the corpora are shallow-cloned into `bench/corpora/` (gitignored).
+Requirements: `git` and `ast-grep` on PATH (e.g. `brew install ast-grep`). On the first run the
+corpora are shallow-cloned into `bench/corpora/` (gitignored).
 
 ## What it does
 
@@ -27,7 +27,7 @@ For each corpus (currently zod for TypeScript, flask for Python):
 ## Reading the output
 
 ```
-"$OBJ.push($$$ARGS)"  stx=217 sg=218 agree=217  (2833ms, 772 KiB/s)
+"$OBJ.push($$$ARGS)"  stx=218 sg=218 agree=218  (stx 2941ms 743 KiB/s, sg 87ms)
   sg-only:  zod/packages/zod/src/...:1257  capturedPaths.push(ctx.path.join("/"))
 ```
 
@@ -36,8 +36,9 @@ For each corpus (currently zod for TypeScript, flask for Python):
 - `stx-only` — stx matched, ast-grep did not (potential false positive or intended semantic
   difference, e.g. strict child consumption per spec §4.3.2).
 - `sg-only` — ast-grep matched, stx did not (potential missed detection; see #2).
-- Time and throughput cover stx matching only (parsing is reported once per corpus, and ast-grep
-  time is not comparable since it includes process startup).
+- stx time and throughput cover matching only (parsing is reported once per corpus). sg time is the
+  wall time of one `ast-grep run --threads 1` subprocess, so it includes process startup and its own
+  parsing — treat it as an order-of-magnitude reference, not a strict engine comparison.
 
 Counts drift as the corpora move: clones are unpinned `--depth 1`, so absolute numbers are not
 comparable across days. Delete `bench/corpora/` to re-clone. The stable signals are the stx/sg

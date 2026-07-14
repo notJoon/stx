@@ -102,25 +102,29 @@ async function runStx(corpus: Corpus, files: string[]) {
   return { perPattern, parseMs, skipped };
 }
 
-async function runAstGrep(corpus: Corpus, files: string[], patternText: string): Promise<Span[]> {
-  const cmd = new Deno.Command("npx", {
+async function runAstGrep(
+  corpus: Corpus,
+  files: string[],
+  patternText: string,
+): Promise<{ spans: Span[]; ms: number }> {
+  const cmd = new Deno.Command("ast-grep", {
     args: [
-      "--yes",
-      "--package",
-      "@ast-grep/cli",
-      "ast-grep",
       "run",
       "-p",
       patternText,
       "-l",
       corpus.sgLang,
       "--json=compact",
+      "--threads",
+      "1", // stx matching is single-threaded; compare like for like
       ...files,
     ],
     stdout: "piped",
     stderr: "piped",
   });
+  const start = performance.now();
   const output = await cmd.output();
+  const ms = performance.now() - start;
   const stdout = new TextDecoder().decode(output.stdout);
   // ast-grep exits 1 when there are zero matches; only fail on unparseable output.
   if (!output.success && !stdout.trim().startsWith("[")) {
@@ -130,11 +134,12 @@ async function runAstGrep(corpus: Corpus, files: string[], patternText: string):
     file: string;
     range: { byteOffset: { start: number; end: number } };
   }[];
-  return parsed.map((m) => ({
+  const spans = parsed.map((m) => ({
     file: m.file,
     start: m.range.byteOffset.start,
     end: m.range.byteOffset.end,
   }));
+  return { spans, ms };
 }
 
 // A stx match and an ast-grep match agree when one range contains the other in
@@ -182,11 +187,11 @@ for (const [name, corpus] of Object.entries(CORPORA)) {
   for (const patternText of corpus.patterns) {
     const { spans, ms } = stx.perPattern.get(patternText)!;
     const sg = await runAstGrep(corpus, files, patternText);
-    const { paired, stxOnly, sgOnly } = pairUp(spans, sg);
+    const { paired, stxOnly, sgOnly } = pairUp(spans, sg.spans);
     const throughput = totalBytes / 1024 / (ms / 1000);
     console.log(
-      `\n"${patternText}"  stx=${spans.length} sg=${sg.length} agree=${paired}  ` +
-        `(${ms.toFixed(0)}ms, ${throughput.toFixed(0)} KiB/s)`,
+      `\n"${patternText}"  stx=${spans.length} sg=${sg.spans.length} agree=${paired}  ` +
+        `(stx ${ms.toFixed(0)}ms ${throughput.toFixed(0)} KiB/s, sg ${sg.ms.toFixed(0)}ms)`,
     );
     for (const span of stxOnly.slice(0, 3)) console.log(`  stx-only: ${snippet(span)}`);
     if (stxOnly.length > 3) console.log(`  stx-only: ... ${stxOnly.length - 3} more`);
