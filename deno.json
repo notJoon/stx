@@ -4,6 +4,7 @@
     "test": "deno test --allow-read",
     "bench": "deno run -A bench/bench.ts"
   },
+  "exclude": ["bench/corpora"],
   "fmt": {
     "lineWidth": 100
   },
