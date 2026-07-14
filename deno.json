@@ -1,7 +1,8 @@
 {
   "tasks": {
     "check": "deno check src test",
-    "test": "deno test --allow-read"
+    "test": "deno test --allow-read",
+    "bench": "deno run -A bench/bench.ts"
   },
   "fmt": {
     "lineWidth": 100
