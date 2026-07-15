@@ -81,7 +81,7 @@ function matchPatternNode(
   if (p.leafText !== undefined) {
     return p.leafText === sourceText(context.target, t) ? bindings : undefined;
   }
-  return matchSeq(p.fixed, p.variadics, units(t, context.semantics), bindings, t, context);
+  return matchSeq(p, units(t, context.semantics), bindings, t, context);
 }
 
 function matchUnit(
@@ -95,13 +95,13 @@ function matchUnit(
 }
 
 function matchSeq(
-  fixed: MatcherUnit[][],
-  variadics: MatcherUnit[],
+  pattern: MatcherNode,
   ts: ComparisonUnit[],
   bindings: Bindings,
   parent: Node,
   context: MatchContext,
 ): Bindings | undefined {
+  const { fixed, variadics } = pattern;
   let current = bindings;
   let i = 0;
 
@@ -144,7 +144,10 @@ function matchSeq(
     }
   }
 
-  return i === ts.length ? current : undefined;
+  // Only anchored patterns require consuming all target units.
+  // Open-ended patterns (no trailing anchor token) may leave trailing units
+  // unmatched (§4.3.2).
+  return i === ts.length || pattern.openEnded ? current : undefined;
 }
 
 function anchorMatches(

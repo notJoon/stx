@@ -17,6 +17,13 @@ export type MatcherNode = {
   leafText?: string;
   fixed: MatcherUnit[][];
   variadics: MatcherUnit[];
+  /** 
+   * True if the node has no trailing anchor token (such as `)` or `}`).
+   * Open-ended nodes use prefix matching: once all pattern comparison units
+   * are consumed, remaining comparison units in the target are ignored,
+   * matching ast-grep's MatchSeq semantics (§4.3.2, step 6).
+   */
+  openEnded: boolean;
 };
 
 export type MatcherUnit = ComparisonUnit<MatcherNode>;
@@ -93,14 +100,23 @@ function compileMatcherNode(
 ): MatcherNode {
   const node = transparentNode(raw, semantics).node;
   const meta = metavars.get(node.id);
-  const result: MatcherNode = { type: node.type, meta, fixed: [[]], variadics: [] };
+  const result: MatcherNode = {
+    type: node.type,
+    meta,
+    fixed: [[]],
+    variadics: [],
+    openEnded: false,
+  };
   if (meta) return result;
   if (node.children.length === 0) {
     result.leafText = source.text.slice(node.startIndex, node.endIndex);
     return result;
   }
 
-  for (const unit of units(node, semantics)) {
+  const nodeUnits = units(node, semantics);
+  result.openEnded = nodeUnits.length > 0 &&
+    node.lastChild?.id === nodeUnits[nodeUnits.length - 1].node.id;
+  for (const unit of nodeUnits) {
     const compiled = {
       node: compileMatcherNode(unit.node, source, metavars, semantics),
       field: unit.field,

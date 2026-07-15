@@ -192,6 +192,34 @@ Deno.test("matches Python block-promoted variadics as sibling units", async () =
   assertEquals(multiCapture(matches[0], "BODY").nodes.map((node) => node.type), ["block"]);
 });
 
+Deno.test("open-ended pattern nodes tolerate optional trailing clauses", async () => {
+  const ifPattern = await compilePattern("if ($COND) { $$$BODY }", "typescript");
+  const ifElse = await SourceFile.parse("typescript", "if (a) { b(); } else { c(); }");
+  assertEquals(findMatches(ifPattern, ifElse).length, 1);
+
+  const raisePattern = await compilePattern("raise $ERR($$$ARGS)", "python");
+  const raiseFrom = await SourceFile.parse("python", 'raise E("x") from None\n');
+  assertEquals(findMatches(raisePattern, raiseFrom).length, 1);
+
+  const blockPattern = await compilePattern("if x:\n  a()\n", "python");
+  const blockSuffix = await SourceFile.parse("python", "if x:\n  a()\n  b()\n");
+  assertEquals(findMatches(blockPattern, blockSuffix).length, 1);
+});
+
+Deno.test("trailing anchor tokens still reject leftover target units", async () => {
+  const call = await compilePattern("f($X)", "typescript");
+  const twoArgs = await SourceFile.parse("typescript", "f(a, b)");
+  assertEquals(findMatches(call, twoArgs).length, 0);
+
+  const emptyCall = await compilePattern("f()", "python");
+  const oneArg = await SourceFile.parse("python", "f(a)");
+  assertEquals(findMatches(emptyCall, oneArg).length, 0);
+
+  const block = await compilePattern("while (x) { a(); }", "typescript");
+  const longerBlock = await SourceFile.parse("typescript", "while (x) { a(); b(); }");
+  assertEquals(findMatches(block, longerBlock).length, 0);
+});
+
 function capture(match: Match, name: string): CaptureValue {
   const value = match.captures.get(name);
   if (!value) throw new Error(`missing capture ${name}`);
