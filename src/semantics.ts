@@ -45,16 +45,17 @@ export function semanticsFor(language: LanguageId): LanguageSemantics {
 /** Returns the named or fielded children visible to the matcher. */
 export function units(node: Node, semantics: LanguageSemantics): ComparisonUnit[] {
   const result: ComparisonUnit[] = [];
-  const children: readonly (Node | null)[] = node.children;
-  children.forEach((child, index) => {
-    if (!child) return;
-
-    const field = node.fieldNameForChild(index) ?? undefined;
-    const override = semantics.comparison_unit_overrides[child.type];
-    if (override ?? (child.isNamed || field !== undefined)) {
-      result.push({ node: child, field });
-    }
-  });
+  const cursor = node.walk();
+  if (cursor.gotoFirstChild()) {
+    do {
+      const field = cursor.currentFieldName ?? undefined;
+      const override = semantics.comparison_unit_overrides[cursor.nodeType];
+      if (override ?? (cursor.nodeIsNamed || field !== undefined)) {
+        result.push({ node: cursor.currentNode, field });
+      }
+    } while (cursor.gotoNextSibling());
+  }
+  cursor.delete();
   return result;
 }
 

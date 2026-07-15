@@ -1,6 +1,5 @@
-import type { Node } from "web-tree-sitter";
 import { type CaptureValue, findMatches, type Match, matchNode } from "../src/matcher.ts";
-import { type CompiledPattern, compilePattern } from "../src/pattern.ts";
+import { compilePattern } from "../src/pattern.ts";
 import { type ByteRange, SourceFile } from "../src/source_file.ts";
 
 function assertEquals(actual: unknown, expected: unknown) {
@@ -134,6 +133,22 @@ Deno.test("reports nested and overlapping matches in pre-order", async () => {
   assertEquals(matches.map((match) => text(target, match.root)), ["f(f(a))", "f(a)", "f(b)"]);
 });
 
+Deno.test("root prefilter keeps metavariable and transparent-root matches", async () => {
+  const target = await SourceFile.parse("typescript", "(a)");
+  const fixed = findMatches(await compilePattern("a", "typescript"), target);
+  const metavariable = findMatches(await compilePattern("$X", "typescript"), target);
+
+  assertEquals(fixed.map((match) => text(target, match.root)), ["(a)", "a"]);
+  assertEquals(metavariable.map((match) => text(target, match.root)), [
+    "(a)",
+    "(a)",
+    "(a)",
+    "(",
+    "a",
+    ")",
+  ]);
+});
+
 Deno.test("unwraps transparent nodes on both pattern and target sides", async () => {
   const targetSide = await compilePattern("$A + $B", "typescript");
   const target = await SourceFile.parse("typescript", "(a) + b");
@@ -157,16 +172,14 @@ Deno.test("supports anonymous variadics without captures", async () => {
   assertEquals([...match.captures.keys()], []);
 });
 
-Deno.test("field labels are part of MatchUnit", () => {
-  const patternRoot = fakeNode(1, "root", [fakeNode(2, "identifier", [], true)], true, ["left"]);
-  const targetRoot = fakeNode(3, "root", [fakeNode(4, "identifier", [], true)], true, ["right"]);
-  const pattern = {
-    source: fakeSource("program"),
-    root: patternRoot,
-    metavars: new Map(),
-  } as unknown as CompiledPattern;
+Deno.test("field labels are part of MatchUnit", async () => {
+  const pattern = await compilePattern("a + b", "typescript");
+  const target = await SourceFile.parse("typescript", "a + b");
+  const candidate = target.tree.rootNode.descendantsOfType("binary_expression")[0];
+  if (!candidate) throw new Error("missing binary expression");
+  pattern.matcherRoot.fixed[0][0].field = "right";
 
-  assertEquals(matchNode(pattern, targetRoot, fakeSource("program")), undefined);
+  assertEquals(matchNode(pattern, candidate, target), undefined);
 });
 
 Deno.test("matches Python block-promoted variadics as sibling units", async () => {
@@ -209,26 +222,4 @@ function singleText(source: SourceFile, match: Match, name: string): string {
 
 function text(source: SourceFile, range: ByteRange): string {
   return source.sourceText(range);
-}
-
-function fakeNode(
-  id: number,
-  type: string,
-  children: Node[],
-  isNamed: boolean,
-  fields: (string | undefined)[] = [],
-): Node {
-  return {
-    id,
-    type,
-    children,
-    isNamed,
-    fieldNameForChild: (index: number) => fields[index] ?? null,
-  } as unknown as Node;
-}
-
-function fakeSource(rootType: string): SourceFile {
-  return {
-    tree: { rootNode: { type: rootType } },
-  } as unknown as SourceFile;
 }

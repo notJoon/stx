@@ -1,14 +1,33 @@
 import type { Node } from "web-tree-sitter";
 import { type LanguageId } from "./grammar.ts";
 import { SourceFile } from "./source_file.ts";
-import { semanticsFor, units } from "./semantics.ts";
+import {
+  type ComparisonUnit,
+  type LanguageSemantics,
+  semanticsFor,
+  transparentNode,
+  units,
+} from "./semantics.ts";
 
 export type Metavariable = { name?: string; variadic: boolean };
+
+export type MatcherNode = {
+  type: string;
+  meta?: Metavariable;
+  leafText?: string;
+  fixed: MatcherUnit[][];
+  variadics: MatcherUnit[];
+};
+
+export type MatcherUnit = ComparisonUnit<MatcherNode>;
 
 export type CompiledPattern = {
   source: SourceFile;
   root: Node;
   metavars: Map<number, Metavariable>;
+  matcherRoot: MatcherNode;
+  language: LanguageId;
+  rootType?: string;
 };
 
 type Occurrence = {
@@ -59,7 +78,41 @@ export async function compilePattern(
   }
   rejectAdjacentVariadics(root, lang, metavars);
 
-  return { source, root, metavars };
+  const semantics = semanticsFor(lang);
+  const matchRoot = transparentNode(root, semantics).node;
+  const rootType = metavars.has(matchRoot.id) ? undefined : matchRoot.type;
+  const matcherRoot = compileMatcherNode(root, source, metavars, semantics);
+  return { source, root, metavars, matcherRoot, language: lang, rootType };
+}
+
+function compileMatcherNode(
+  raw: Node,
+  source: SourceFile,
+  metavars: Map<number, Metavariable>,
+  semantics: LanguageSemantics,
+): MatcherNode {
+  const node = transparentNode(raw, semantics).node;
+  const meta = metavars.get(node.id);
+  const result: MatcherNode = { type: node.type, meta, fixed: [[]], variadics: [] };
+  if (meta) return result;
+  if (node.children.length === 0) {
+    result.leafText = source.text.slice(node.startIndex, node.endIndex);
+    return result;
+  }
+
+  for (const unit of units(node, semantics)) {
+    const compiled = {
+      node: compileMatcherNode(unit.node, source, metavars, semantics),
+      field: unit.field,
+    };
+    if (compiled.node.meta?.variadic) {
+      result.variadics.push(compiled);
+      result.fixed.push([]);
+    } else {
+      result.fixed[result.fixed.length - 1].push(compiled);
+    }
+  }
+  return result;
 }
 
 function validatePrefix(prefix: string) {

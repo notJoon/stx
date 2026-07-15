@@ -1,5 +1,5 @@
 import type { Node } from "web-tree-sitter";
-import type { CompiledPattern, Metavariable } from "./pattern.ts";
+import type { CompiledPattern, MatcherNode, MatcherUnit } from "./pattern.ts";
 import { type ByteRange, SourceFile } from "./source_file.ts";
 import { type ComparisonUnit, semanticsFor, units } from "./semantics.ts";
 
@@ -19,17 +19,29 @@ type Bindings = Map<string, CaptureValue>;
 /** Finds every candidate-root match in target tree pre-order. */
 export function findMatches(pattern: CompiledPattern, target: SourceFile): Match[] {
   const matches: Match[] = [];
-  visit(target.tree.rootNode);
+  const transparentTypes = semanticsFor(pattern.language).transparent_nodes;
+  const cursor = target.tree.walk();
+  visit();
+  cursor.delete();
   return matches;
 
-  function visit(node: Node) {
-    if (target.isInsideParseProblem(node)) return;
+  function visit() {
+    const type = cursor.nodeType;
+    if (type === "ERROR" || cursor.nodeIsMissing) return;
 
-    const match = matchNode(pattern, node, target);
-    if (match) matches.push(match);
+    if (
+      pattern.rootType === undefined ||
+      type === pattern.rootType ||
+      transparentTypes.has(type)
+    ) {
+      const node = cursor.currentNode;
+      const match = matchNode(pattern, node, target);
+      if (match) matches.push(match);
+    }
 
-    for (const child of node.children) {
-      if (child) visit(child);
+    if (cursor.gotoFirstChild()) {
+      do visit(); while (cursor.gotoNextSibling());
+      cursor.gotoParent();
     }
   }
 }
@@ -40,9 +52,8 @@ export function matchNode(
   candidate: Node,
   target: SourceFile,
 ): Match | undefined {
-  const semantics = semanticsFor(languageOf(pattern.source));
-  const captures = matchPatternNode(pattern.root, candidate, new Map(), {
-    pattern,
+  const semantics = semanticsFor(pattern.language);
+  const captures = matchPatternNode(pattern.matcherRoot, candidate, new Map(), {
     target,
     semantics,
   });
@@ -51,18 +62,15 @@ export function matchNode(
 }
 
 function matchPatternNode(
-  p: Node,
+  p: MatcherNode,
   t: Node,
   bindings: Bindings,
   context: MatchContext,
 ): Bindings | undefined {
-  const pUnwrapped = unwrapTransparent(p, context);
-  if (pUnwrapped.id !== p.id) return matchPatternNode(pUnwrapped, t, bindings, context);
-
   const tUnwrapped = unwrapTransparent(t, context);
   if (tUnwrapped.id !== t.id) return matchPatternNode(p, tUnwrapped, bindings, context);
 
-  const meta = context.pattern.metavars.get(p.id);
+  const meta = p.meta;
   if (meta?.name === undefined && meta?.variadic === false) return bindings;
   if (meta?.name !== undefined && meta.variadic === false) {
     return bindSingle(meta.name, t, bindings, context);
@@ -70,22 +78,14 @@ function matchPatternNode(
   if (meta?.variadic === true) return undefined;
 
   if (p.type !== t.type) return undefined;
-  if (p.children.length === 0) {
-    return sourceText(context.pattern.source, p) === sourceText(context.target, t)
-      ? bindings
-      : undefined;
+  if (p.leafText !== undefined) {
+    return p.leafText === sourceText(context.target, t) ? bindings : undefined;
   }
-  return matchSeq(
-    units(p, context.semantics),
-    units(t, context.semantics),
-    bindings,
-    t,
-    context,
-  );
+  return matchSeq(p.fixed, p.variadics, units(t, context.semantics), bindings, t, context);
 }
 
 function matchUnit(
-  pu: ComparisonUnit,
+  pu: MatcherUnit,
   tu: ComparisonUnit,
   bindings: Bindings,
   context: MatchContext,
@@ -95,13 +95,13 @@ function matchUnit(
 }
 
 function matchSeq(
-  ps: ComparisonUnit[],
+  fixed: MatcherUnit[][],
+  variadics: MatcherUnit[],
   ts: ComparisonUnit[],
   bindings: Bindings,
   parent: Node,
   context: MatchContext,
 ): Bindings | undefined {
-  const { fixed, variadics } = splitSegments(ps, context);
   let current = bindings;
   let i = 0;
 
@@ -148,7 +148,7 @@ function matchSeq(
 }
 
 function anchorMatches(
-  fixed: ComparisonUnit[],
+  fixed: MatcherUnit[],
   ts: ComparisonUnit[],
   s: number,
   bindings: Bindings,
@@ -165,7 +165,7 @@ function anchorMatches(
 }
 
 function bindVariadic(
-  unit: ComparisonUnit,
+  unit: MatcherUnit,
   ts: ComparisonUnit[],
   i: number,
   s: number,
@@ -173,7 +173,7 @@ function bindVariadic(
   parent: Node,
   context: MatchContext,
 ): Bindings | undefined {
-  const meta = context.pattern.metavars.get(unit.node.id);
+  const meta = unit.node.meta;
   if (!meta?.variadic) return undefined;
   if (meta.name === undefined) return bindings;
 
@@ -202,30 +202,13 @@ function emptySpan(
     return { start: end, end };
   }
 
-  const firstChild = parent.children.find((child: Node | null): child is Node => child !== null);
+  const firstChild = parent.firstChild;
   if (firstChild) {
     const end = target.rangeOf(firstChild).end;
     return { start: end, end };
   }
   const start = target.rangeOf(parent).start;
   return { start, end: start };
-}
-
-function splitSegments(ps: ComparisonUnit[], context: MatchContext) {
-  const fixed: ComparisonUnit[][] = [[]];
-  const variadics: ComparisonUnit[] = [];
-
-  for (const unit of ps) {
-    const meta = context.pattern.metavars.get(unit.node.id);
-    if (meta?.variadic) {
-      variadics.push(unit);
-      fixed.push([]);
-    } else {
-      fixed[fixed.length - 1].push(unit);
-    }
-  }
-
-  return { fixed, variadics };
 }
 
 function bindSingle(
@@ -248,9 +231,8 @@ function bindValue(
     return undefined;
   }
 
-  const next = new Map(bindings);
-  next.set(name, value);
-  return next;
+  bindings.set(name, value);
+  return bindings;
 }
 
 function unwrapTransparent(node: Node, context: MatchContext): Node {
@@ -260,19 +242,14 @@ function unwrapTransparent(node: Node, context: MatchContext): Node {
 }
 
 function sourceText(source: SourceFile, node: Node): string {
-  return source.sourceText(source.rangeOf(node));
+  return source.text.slice(node.startIndex, node.endIndex);
 }
 
 function captureText(value: CaptureValue, source: SourceFile): string {
   return source.sourceText(value.kind === "single" ? source.rangeOf(value.node) : value.span);
 }
 
-function languageOf(source: SourceFile) {
-  return source.tree.rootNode.type === "module" ? "python" : "typescript";
-}
-
 type MatchContext = {
-  pattern: CompiledPattern;
   target: SourceFile;
   semantics: ReturnType<typeof semanticsFor>;
 };
