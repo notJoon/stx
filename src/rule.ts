@@ -9,6 +9,12 @@ import { SourceFile } from "./source_file.ts";
 
 export type Severity = "error" | "warn" | "info" | "off";
 
+/** A normalized rule fix; string shorthand is loaded as a safe fix. */
+export type RuleFix = { template: string; safety: "safe" | "unsafe" };
+
+/** A report-only replacement template and its user-facing message. */
+export type RuleSuggestion = { message: string; template: string };
+
 type StopBy = "neighbor" | "end" | { kind: string };
 type Regex = InstanceType<typeof RE2>;
 
@@ -26,6 +32,11 @@ type CompiledExpression =
   | { type: "matches"; target: CompiledExpression };
 
 type CompiledConstraint = { name: string; expression: CompiledExpression };
+const COMPILED_RULE = Symbol("compiledRule");
+type CompiledRule = {
+  rule: CompiledExpression;
+  constraints: readonly CompiledConstraint[];
+};
 
 export type LoadedRule = {
   version: 1;
@@ -33,16 +44,15 @@ export type LoadedRule = {
   language: LanguageId;
   severity: Severity;
   message: string;
-  rule: CompiledExpression;
-  constraints: readonly CompiledConstraint[];
-  utils: ReadonlyMap<string, CompiledExpression>;
-  fix?: string;
+  fix?: RuleFix;
+  suggestions: readonly RuleSuggestion[];
   note?: string;
   url?: string;
   metaVarPrefix: string;
   engine: "ast";
+  readonly [COMPILED_RULE]: CompiledRule;
   /** Compatibility handle for existing pattern-only callers. */
-  pattern?: CompiledPattern;
+  readonly pattern: CompiledPattern;
 };
 
 export class RuleLoadError extends Error {
@@ -81,7 +91,7 @@ export async function loadRuleText(text: string): Promise<LoadedRule> {
 
 /** Evaluates a compiled rule against every valid candidate node in source order. */
 export function findRuleMatches(rule: LoadedRule, source: SourceFile): Match[] {
-  if (rule.severity === "off") return [];
+  const compiled = rule[COMPILED_RULE];
   const result: Match[] = [];
   const context: EvalContext = { source, semantics: semanticsFor(rule.language) };
   const cursor = source.tree.walk();
@@ -92,8 +102,8 @@ export function findRuleMatches(rule: LoadedRule, source: SourceFile): Match[] {
   function visit() {
     if (cursor.nodeType === "ERROR" || cursor.nodeIsMissing) return;
     const node = cursor.currentNode;
-    const captures = evaluate(rule.rule, node, new Map(), context);
-    if (captures && constraintsPass(rule.constraints, node, captures, context)) {
+    const captures = evaluate(compiled.rule, node, new Map(), context);
+    if (captures && constraintsPass(compiled.constraints, node, captures, context)) {
       result.push({ root: source.rangeOf(node), captures });
     }
     if (cursor.gotoFirstChild()) {
@@ -117,6 +127,7 @@ async function compileDocument(document: Record<string, unknown>): Promise<Loade
       "constraints",
       "utils",
       "fix",
+      "suggestions",
       "note",
       "url",
       "metaVarPrefix",
@@ -127,6 +138,10 @@ async function compileDocument(document: Record<string, unknown>): Promise<Loade
 
   if (document.version !== 1) throw new RuleLoadError("version must be the number 1");
   const id = string(document, "id");
+  const idParts = id.split("/");
+  if (id.trim() !== id || idParts.length !== 2 || idParts.some((part) => part.length === 0)) {
+    throw new RuleLoadError("id must use canonical package/rule-name form");
+  }
   if (id.startsWith("tool/")) throw new RuleLoadError("id must not use the tool/ prefix");
   const language = string(document, "language");
   if (language !== "typescript" && language !== "python") {
@@ -144,7 +159,7 @@ async function compileDocument(document: Record<string, unknown>): Promise<Loade
     : string(document, "metaVarPrefix");
 
   // Reuse the pattern scanner for prefix validation and every capture reference vocabulary.
-  scanMetavariables("", metaVarPrefix, language, true);
+  scanMetavariables("", metaVarPrefix, language, { allowMatch: true });
   const rawUtils = document.utils === undefined ? {} : record(document.utils, "utils");
   const compiledUtils = new Map<string, CompiledExpression>();
   const compiling = new Set<string>();
@@ -182,9 +197,31 @@ async function compileDocument(document: Record<string, unknown>): Promise<Loade
   const refs = [
     ...templateReferences(message, metaVarPrefix, language, arities, "message"),
   ];
-  const fix = optionalString(document, "fix");
+  const fix = compileFix(document.fix);
   if (fix !== undefined) {
-    refs.push(...templateReferences(fix, metaVarPrefix, language, arities, "fix"));
+    refs.push(
+      ...templateReferences(fix.template, metaVarPrefix, language, arities, "fix.template"),
+    );
+  }
+  const suggestions = compileSuggestions(document.suggestions);
+  for (let i = 0; i < suggestions.length; i++) {
+    const suggestion = suggestions[i];
+    refs.push(
+      ...templateReferences(
+        suggestion.message,
+        metaVarPrefix,
+        language,
+        arities,
+        `suggestions[${i}].message`,
+      ),
+      ...templateReferences(
+        suggestion.template,
+        metaVarPrefix,
+        language,
+        arities,
+        `suggestions[${i}].template`,
+      ),
+    );
   }
 
   const constraints: CompiledConstraint[] = [];
@@ -216,15 +253,19 @@ async function compileDocument(document: Record<string, unknown>): Promise<Loade
     language,
     severity,
     message,
-    rule,
-    constraints,
-    utils: compiledUtils,
     fix,
+    suggestions,
     note: optionalString(document, "note"),
     url: optionalString(document, "url"),
     metaVarPrefix,
     engine: "ast",
-    pattern: rule.type === "pattern" ? rule.pattern : undefined,
+    [COMPILED_RULE]: { rule, constraints },
+    get pattern() {
+      if (rule.type !== "pattern") {
+        throw new TypeError("pattern is only available for pattern-only rules");
+      }
+      return rule.pattern;
+    },
   };
 }
 
@@ -427,8 +468,7 @@ function* relatedNodes(
     ? siblings.slice(0, index).reverse()
     : siblings.slice(index + 1);
   for (const sibling of candidates) {
-    if (context.source.isInsideParseProblem(sibling)) continue;
-    yield sibling;
+    if (!context.source.isInsideParseProblem(sibling)) yield sibling;
     if (stopBy === "neighbor" || isBoundary(sibling, stopBy)) return;
   }
 }
@@ -516,8 +556,10 @@ function templateReferences(
   arities: Map<string, boolean>,
   field: string,
 ): string[] {
-  return scanMetavariables(text, prefix, language, true).flatMap(({ meta }) => {
-    if (!meta.name) return [];
+  return scanMetavariables(text, prefix, language, { allowMatch: true }).flatMap(({ meta }) => {
+    if (!meta.name) {
+      throw new RuleLoadError(`${field}: anonymous metavariables cannot be referenced`);
+    }
     if (meta.name === "MATCH") {
       if (meta.variadic) throw new RuleLoadError(`${field}: MATCH reference must be single`);
       return [meta.name];
@@ -533,7 +575,7 @@ function constraintName(
   language: LanguageId,
   arities: Map<string, boolean>,
 ): string {
-  const occurrences = scanMetavariables(key, prefix, language, true);
+  const occurrences = scanMetavariables(key, prefix, language, { allowMatch: true });
   const occurrence = occurrences[0];
   if (
     occurrences.length !== 1 || occurrence.start !== 0 || occurrence.end !== key.length ||
@@ -629,6 +671,33 @@ function string(value: Record<string, unknown>, key: string, field = key): strin
 function optionalString(value: Record<string, unknown>, key: string): string | undefined {
   if (value[key] === undefined) return undefined;
   return string(value, key);
+}
+
+function compileFix(value: unknown): RuleFix | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") return { template: value, safety: "safe" };
+  const fix = record(value, "fix");
+  onlyKeys(fix, ["template", "safety"], "fix");
+  const template = string(fix, "template", "fix.template");
+  const safety = fix.safety === undefined ? "safe" : string(fix, "safety", "fix.safety");
+  if (safety !== "safe" && safety !== "unsafe") {
+    throw new RuleLoadError("fix.safety must be safe or unsafe");
+  }
+  return { template, safety };
+}
+
+function compileSuggestions(value: unknown): RuleSuggestion[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new RuleLoadError("suggestions must be an array");
+  return value.map((item, index) => {
+    const field = `suggestions[${index}]`;
+    const suggestion = record(item, field);
+    onlyKeys(suggestion, ["message", "template"], field);
+    return {
+      message: string(suggestion, "message", `${field}.message`),
+      template: string(suggestion, "template", `${field}.template`),
+    };
+  });
 }
 
 function onlyKeys(value: Record<string, unknown>, allowed: readonly string[], field: string) {

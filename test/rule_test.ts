@@ -1,3 +1,4 @@
+import { findMatches } from "../src/matcher.ts";
 import { findRuleMatches, loadRule, loadRuleText, RuleLoadError } from "../src/rule.ts";
 import { SourceFile } from "../src/source_file.ts";
 
@@ -12,7 +13,7 @@ function yaml(rule: string, extra = ""): string {
 id: test/rule
 language: typescript
 severity: warn
-${extra.includes("message:") ? "" : "message: test\n"}
+${extra.split("\n").some((line) => line.startsWith("message:")) ? "" : "message: test\n"}
 ${extra}rule:
 ${rule}`;
 }
@@ -31,7 +32,7 @@ Deno.test("loads a YAML pattern rule and matches a real TypeScript file", async 
   const rule = await loadRule(new URL("fixtures/console_log.yaml", import.meta.url));
   const bytes = await Deno.readFile(new URL("fixtures/console_log.ts", import.meta.url));
   const source = await SourceFile.parse(rule.language, bytes);
-  const matches = findRuleMatches(rule, source);
+  const matches = findMatches(rule.pattern, source);
 
   assertEquals(
     {
@@ -515,9 +516,6 @@ Deno.test("keeps utils local and shared, rejects cycles, and limits expanded dep
   right: { matches: leaf }
 `,
   ));
-  const left = dag.utils.get("left") as { type: string; target?: unknown };
-  const right = dag.utils.get("right") as { type: string; target?: unknown };
-  assertEquals(left.target === right.target, true);
   assertEquals(
     findRuleMatches(dag, await SourceFile.parse("typescript", "f(a)")).length,
     1,
@@ -548,10 +546,96 @@ constraints:
   assertEquals(matches.length, 1);
   assertEquals([...matches[0].captures.keys()], ["X"]);
   assertEquals({ fix: rule.fix, note: rule.note, url: rule.url }, {
-    fix: "g(µX)",
+    fix: { template: "g(µX)", safety: "safe" },
     note: "note",
     url: "https://example.test/rule",
   });
+});
+
+Deno.test("normalizes fix shorthand and loads long fixes with suggestions", async () => {
+  const shorthand = await loadRuleText(yaml(
+    `  pattern: f($X)`,
+    `fix: g($X)
+`,
+  ));
+  assertEquals(shorthand.fix, { template: "g($X)", safety: "safe" });
+  assertEquals(shorthand.suggestions, []);
+
+  const long = await loadRuleText(`version: 1
+id: test/rewrites
+language: typescript
+severity: warn
+message: call $X
+fix:
+  template: g($X)
+  safety: unsafe
+suggestions:
+  - message: use h($X)
+    template: h($X)
+  - message: delete $MATCH
+    template: ""
+rule:
+  pattern: f($X)
+`);
+  assertEquals(long.fix, { template: "g($X)", safety: "unsafe" });
+  assertEquals(long.suggestions, [
+    { message: "use h($X)", template: "h($X)" },
+    { message: "delete $MATCH", template: "" },
+  ]);
+});
+
+Deno.test("strictly validates fix and suggestion object schemas", async () => {
+  const cases = [
+    ["fix: { template: g($X), safety: risky }", "fix.safety"],
+    ["fix: { safety: safe }", "fix.template"],
+    ["fix: { template: g($X), extra: true }", "fix has unsupported field: extra"],
+    ["suggestions: nope", "suggestions must be an array"],
+    ["suggestions: [{ template: g($X) }]", "suggestions[0].message"],
+    ["suggestions: [{ message: use g }]", "suggestions[0].template"],
+    [
+      "suggestions: [{ message: use g, template: g($X), extra: true }]",
+      "suggestions[0] has unsupported field: extra",
+    ],
+  ];
+  for (const [schema, message] of cases) {
+    await assertLoadError(yaml(`  pattern: f($X)`, `${schema}\n`), message);
+  }
+});
+
+Deno.test("validates metavariable references in suggestion messages and templates", async () => {
+  const cases = [
+    ["use $Y", "g($X)", "undefined capture reference: Y"],
+    ["use $X", "g($Y)", "undefined capture reference: Y"],
+    ["use $$$X", "g($X)", "arity mismatch: X"],
+    ["use $X", "g($$$X)", "arity mismatch: X"],
+  ];
+  for (const [message, template, error] of cases) {
+    await assertLoadError(
+      yaml(
+        `  pattern: f($X)`,
+        `suggestions:
+  - message: ${message}
+    template: ${template}
+`,
+      ),
+      error,
+    );
+  }
+});
+
+Deno.test("rejects anonymous metavariables in every reporting template", async () => {
+  const cases = [
+    "message: use $_",
+    "fix: g($_)",
+    "suggestions: [{ message: use $_, template: g($X) }]",
+    "suggestions: [{ message: use $X, template: g($_) }]",
+  ];
+  for (const schema of cases) {
+    await assertLoadError(
+      yaml(`  pattern: f($X)`, `${schema}\n`),
+      "anonymous metavariables cannot be referenced",
+    );
+  }
 });
 
 Deno.test("strictly rejects unsupported rule schema and relation modifiers", async () => {
@@ -569,6 +653,91 @@ Deno.test("strictly rejects unsupported rule schema and relation modifiers", asy
     [yaml(`  kind: identifier`, "engine: structural\n"), "unsupported engine: structural"],
   ];
   for (const [text, message] of cases) await assertLoadError(text, message);
+});
+
+Deno.test("parse-error siblings still consume neighbor distance", async () => {
+  const rule = await loadRuleText(yaml(`  all:
+    - regex: ^b$
+    - follows:
+        regex: ^a$`));
+  const source = await SourceFile.parse("typescript", "f(a, +, b)");
+  assertEquals(findRuleMatches(rule, source), []);
+});
+
+Deno.test("severity off does not change the rule MatchSet", async () => {
+  const rule = await loadRuleText(
+    yaml(`  pattern: f($X)`).replace("severity: warn", "severity: off"),
+  );
+  assertEquals(
+    findRuleMatches(rule, await SourceFile.parse("typescript", "f(a)")).length,
+    1,
+  );
+});
+
+Deno.test("requires canonical package/rule IDs", async () => {
+  for (const id of ["", "foo", "/x", "x/", "x/y/z", " x/y"]) {
+    await assertLoadError(
+      yaml(`  kind: identifier`).replace("id: test/rule", `id: ${JSON.stringify(id)}`),
+      "canonical",
+    );
+  }
+});
+
+Deno.test("evaluates sibling relations through Python units", async () => {
+  const rule = await loadRuleText(`version: 1
+id: test/python-relation
+language: python
+severity: warn
+message: test
+rule:
+  all:
+    - regex: ^b$
+    - follows:
+        regex: ^a$
+`);
+  const source = await SourceFile.parse("python", "f(a, b)\n");
+  assertEquals(
+    findRuleMatches(rule, source).map((match) => source.sourceText(match.root)),
+    ["b"],
+  );
+});
+
+Deno.test("keeps relation and util negative cases negative", async () => {
+  const source = await SourceFile.parse("typescript", "f(a, b)");
+  const cases = [
+    `  all:
+    - regex: ^b$
+    - inside: { kind: function_declaration }`,
+    `  all:
+    - regex: ^b$
+    - follows: { regex: ^c$ }`,
+    `  all:
+    - regex: ^a$
+    - precedes: { regex: ^c$ }`,
+  ];
+  for (const body of cases) {
+    assertEquals(findRuleMatches(await loadRuleText(yaml(body)), source), []);
+  }
+
+  const util = await loadRuleText(yaml(
+    `  matches: g-call`,
+    `utils:
+  g-call: { pattern: g($_) }
+`,
+  ));
+  assertEquals(findRuleMatches(util, source), []);
+});
+
+Deno.test("does not evaluate ERROR or MISSING nodes as rule candidates", async () => {
+  const rule = await loadRuleText(yaml(`  kind: ERROR`));
+  const source = await SourceFile.parse("typescript", "f(a, +, b)");
+  assertEquals(source.parseProblems.some((problem) => problem.isError), true);
+  assertEquals(findRuleMatches(rule, source), []);
+
+  const missingRule = await loadRuleText(yaml(`  kind: ";"`));
+  const missing = await SourceFile.parse("typescript", "if (x)");
+  assertEquals(missing.parseProblems.some((problem) => problem.isMissing), true);
+  assertEquals(findRuleMatches(missingRule, missing), []);
 });
 
 function nestedNots(count: number): string {

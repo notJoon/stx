@@ -144,7 +144,7 @@ export function scanMetavariables(
   input: string,
   prefix: string,
   lang: LanguageId,
-  allowMatch = false,
+  options: { allowMatch?: boolean } = {},
 ): MetavariableOccurrence[] {
   validatePrefix(prefix);
   const result: MetavariableOccurrence[] = [];
@@ -173,7 +173,7 @@ export function scanMetavariables(
     if (k !== 1 && k !== 3) {
       throw new CompileError(`invalid metavariable prefix run length: ${k}`);
     }
-    if (rawName === "MATCH" && !allowMatch) {
+    if (rawName === "MATCH" && !options.allowMatch) {
       throw new CompileError("MATCH is a reserved metavariable name");
     }
 

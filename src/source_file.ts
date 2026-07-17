@@ -14,7 +14,7 @@ export type ParseProblem = {
 };
 
 const BOM = new Uint8Array([0xef, 0xbb, 0xbf]);
-const UTF8 = new TextDecoder("utf-8", { fatal: true });
+const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export class SourceFile {
   readonly #diskBytes: Uint8Array;
@@ -22,13 +22,16 @@ export class SourceFile {
   readonly #indexToByte: readonly number[];
 
   readonly bomLen: number;
+  /** Language used to parse this source and interpret its syntax. */
+  readonly language: LanguageId;
   readonly text: string;
   readonly tree: Tree;
   readonly lineIndex: readonly number[];
   readonly parseProblems: readonly ParseProblem[];
 
-  private constructor(diskBytes: Uint8Array, text: string, tree: Tree) {
+  private constructor(language: LanguageId, diskBytes: Uint8Array, text: string, tree: Tree) {
     this.#diskBytes = diskBytes;
+    this.language = language;
     this.bomLen = hasBom(diskBytes) ? BOM.length : 0;
     this.#bytes = diskBytes.slice(this.bomLen);
     this.text = text;
@@ -45,7 +48,7 @@ export class SourceFile {
     const parser = await createParser(language);
     const tree = parser.parse(text);
     if (!tree) throw new Error(`failed to parse ${language}`);
-    return new SourceFile(diskBytes, text, tree);
+    return new SourceFile(language, diskBytes, text, tree);
   }
 
   get diskBytes(): Uint8Array {
