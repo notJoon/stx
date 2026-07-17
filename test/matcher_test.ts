@@ -8,7 +8,7 @@ function assertEquals(actual: unknown, expected: unknown) {
   }
 }
 
-function assert(condition: unknown, message = "assertion failed") {
+function assert(condition: unknown, message = "assertion failed"): asserts condition {
   if (!condition) throw new Error(message);
 }
 
@@ -88,6 +88,26 @@ Deno.test("enforces repeated named metavariables by byte-for-byte source text", 
 
   const anonymous = await compilePattern("$_ == $_", "typescript");
   assertEquals(findMatches(anonymous, await SourceFile.parse("typescript", "a == b")).length, 1);
+});
+
+Deno.test("starts from immutable captures and keeps the first equal-text range", async () => {
+  const target = await SourceFile.parse("typescript", "f(a); f(a); f(b)");
+  const calls = target.tree.rootNode.descendantsOfType("call_expression");
+  const identifiers = target.tree.rootNode.descendantsOfType("identifier");
+  const first = calls[0];
+  const third = calls[2];
+  const secondA = identifiers[3];
+  assert(first && third && secondA);
+  const initial = new Map<string, CaptureValue>([["X", { kind: "single", node: secondA }]]);
+  const pattern = await compilePattern("f($X)", "typescript");
+
+  const match = matchNode(pattern, first, target, initial);
+  assert(match);
+  assertEquals(singleText(target, match, "X"), "a");
+  assertEquals(singleCapture(match, "X").node.id, secondA.id);
+  assertEquals(initial.size, 1);
+  assertEquals(matchNode(pattern, third, target, initial), undefined);
+  assertEquals(initial.size, 1);
 });
 
 Deno.test("does not report alternative variadic splits", async () => {

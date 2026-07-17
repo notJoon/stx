@@ -10,6 +10,7 @@
   },
   "imports": {
     "@std/yaml": "jsr:@std/yaml@1.0.8",
+    "re2-wasm": "npm:re2-wasm@1.0.2",
     "web-tree-sitter": "npm:web-tree-sitter@0.25.10",
     "tree-sitter-wasms/package.json": "npm:tree-sitter-wasms@0.1.13/package.json"
   }

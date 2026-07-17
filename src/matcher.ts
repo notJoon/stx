@@ -51,9 +51,10 @@ export function matchNode(
   pattern: CompiledPattern,
   candidate: Node,
   target: SourceFile,
+  initial: ReadonlyMap<string, CaptureValue> = new Map(),
 ): Match | undefined {
   const semantics = semanticsFor(pattern.language);
-  const captures = matchPatternNode(pattern.matcherRoot, candidate, new Map(), {
+  const captures = matchPatternNode(pattern.matcherRoot, candidate, new Map(initial), {
     target,
     semantics,
   });
@@ -233,8 +234,7 @@ function bindValue(
   if (existing && captureText(existing, context.target) !== captureText(value, context.target)) {
     return undefined;
   }
-
-  bindings.set(name, value);
+  if (!existing) bindings.set(name, value);
   return bindings;
 }
 

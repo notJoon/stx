@@ -17,7 +17,7 @@ export type MatcherNode = {
   leafText?: string;
   fixed: MatcherUnit[][];
   variadics: MatcherUnit[];
-  /** 
+  /**
    * True if the node has no trailing anchor token (such as `)` or `}`).
    * Open-ended nodes use prefix matching: once all pattern comparison units
    * are consumed, remaining comparison units in the target are ignored,
@@ -37,10 +37,11 @@ export type CompiledPattern = {
   rootType?: string;
 };
 
-type Occurrence = {
+export type MetavariableOccurrence = {
   start: number;
   end: number;
   meta: Metavariable;
+  rawName: string;
 };
 
 export class CompileError extends Error {
@@ -138,53 +139,43 @@ function validatePrefix(prefix: string) {
   }
 }
 
-function replaceMetavars(input: string, prefix: string, lang: LanguageId) {
-  const assigned = new Map<string, { placeholder: string; meta: Metavariable }>();
-  const usedPlaceholders = new Set<string>();
+/** Scans metavariables with the same lexical rules used by patterns and templates. */
+export function scanMetavariables(
+  input: string,
+  prefix: string,
+  lang: LanguageId,
+  allowMatch = false,
+): MetavariableOccurrence[] {
+  validatePrefix(prefix);
+  const result: MetavariableOccurrence[] = [];
   const arityByName = new Map<string, boolean>();
-  const occurrences: Occurrence[] = [];
-  let nextPlaceholder = 0;
-  let output = "";
 
   // Pure text scan. DO NOT track strings or comments here.
   for (let i = 0; i < input.length;) {
     if (!input.startsWith(prefix, i)) {
-      const char = codePointAt(input, i);
-      output += char;
-      i += char.length;
+      i += codePointAt(input, i).length;
       continue;
     }
 
+    const start = i;
     let k = 0;
     while (input.startsWith(prefix, i + k * prefix.length)) k++;
     const runEnd = i + k * prefix.length;
-
-    // if blocked by an identifier char, consume the whole prefix run as literal text.
     if (isIdentifierChar(codePointBefore(input, i), lang)) {
-      output += input.slice(i, runEnd);
       i = runEnd;
       continue;
     }
 
     const nameEnd = identifierRunEnd(input, runEnd, lang);
     const rawName = input.slice(runEnd, nameEnd);
-    // keep the prefix run as literal text for empty identifier.
-    if (rawName.length === 0) {
-      output += input.slice(i, runEnd);
-      i = runEnd;
-      continue;
-    }
-    // Non-name chars make the whole candidate literal text.
-    if (![...rawName].every(isNameChar)) {
-      output += input.slice(i, nameEnd);
-      i = nameEnd;
-      continue;
-    }
-    // Pure name: choose arity from the prefix run length.
+    i = nameEnd;
+    if (rawName.length === 0 || ![...rawName].every(isNameChar)) continue;
     if (k !== 1 && k !== 3) {
       throw new CompileError(`invalid metavariable prefix run length: ${k}`);
     }
-    if (rawName === "MATCH") throw new CompileError("MATCH is a reserved metavariable name");
+    if (rawName === "MATCH" && !allowMatch) {
+      throw new CompileError("MATCH is a reserved metavariable name");
+    }
 
     const variadic = k === 3;
     const name = rawName.startsWith("_") ? undefined : rawName;
@@ -195,14 +186,29 @@ function replaceMetavars(input: string, prefix: string, lang: LanguageId) {
       }
       arityByName.set(name, variadic);
     }
+    result.push({ start, end: nameEnd, meta: { name, variadic }, rawName });
+  }
+  return result;
+}
 
-    const key = `${variadic ? "multi" : "single"}:${name ?? `_${rawName}`}`;
+function replaceMetavars(input: string, prefix: string, lang: LanguageId) {
+  const assigned = new Map<string, { placeholder: string; meta: Metavariable }>();
+  const usedPlaceholders = new Set<string>();
+  const occurrences: MetavariableOccurrence[] = [];
+  let nextPlaceholder = 0;
+  let output = "";
+  let consumed = 0;
+
+  for (const occurrence of scanMetavariables(input, prefix, lang)) {
+    output += input.slice(consumed, occurrence.start);
+    const { meta, rawName } = occurrence;
+    const key = `${meta.variadic ? "multi" : "single"}:${meta.name ?? `_${rawName}`}`;
     let found = assigned.get(key);
     if (!found) {
       const next = nextAvailablePlaceholder(input, usedPlaceholders, nextPlaceholder);
       nextPlaceholder = next.index + 1;
       const placeholder = next.placeholder;
-      found = { placeholder, meta: { name, variadic } };
+      found = { placeholder, meta };
       assigned.set(key, found);
       usedPlaceholders.add(placeholder);
     }
@@ -211,10 +217,13 @@ function replaceMetavars(input: string, prefix: string, lang: LanguageId) {
       start: output.length,
       end: output.length + found.placeholder.length,
       meta: found.meta,
+      rawName,
     });
     output += found.placeholder;
-    i = nameEnd;
+    consumed = occurrence.end;
   }
+
+  output += input.slice(consumed);
 
   return { text: output, occurrences };
 }
@@ -232,7 +241,11 @@ function nextAvailablePlaceholder(
   }
 }
 
-function restoreMetavars(root: Node, patternRoot: Node, occurrences: Occurrence[]) {
+function restoreMetavars(
+  root: Node,
+  patternRoot: Node,
+  occurrences: MetavariableOccurrence[],
+) {
   const metavars = new Map<number, Metavariable>();
   for (const occ of occurrences) {
     // Whole-token check: the smallest covering node must exactly match the occurrence.

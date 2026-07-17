@@ -3,6 +3,7 @@
   "specifiers": {
     "jsr:@std/yaml@*": "1.0.8",
     "jsr:@std/yaml@1.0.8": "1.0.8",
+    "npm:re2-wasm@1.0.2": "1.0.2",
     "npm:tree-sitter-wasms@0.1.13": "0.1.13",
     "npm:web-tree-sitter@0.25.10": "0.25.10"
   },
@@ -12,6 +13,9 @@
     }
   },
   "npm": {
+    "re2-wasm@1.0.2": {
+      "integrity": "sha512-VXUdgSiUrE/WZXn6gUIVVIsg0+Hp6VPZPOaHCay+OuFKy6u/8ktmeNEf+U5qSA8jzGGFsg8jrDNu1BeHpz2pJA=="
+    },
     "tree-sitter-wasms@0.1.13": {
       "integrity": "sha512-wT+cR6DwaIz80/vho3AvSF0N4txuNx/5bcRKoXouOfClpxh/qqrF4URNLQXbbt8MaAxeksZcZd1j8gcGjc+QxQ=="
     },
@@ -22,6 +26,7 @@
   "workspace": {
     "dependencies": [
       "jsr:@std/yaml@1.0.8",
+      "npm:re2-wasm@1.0.2",
       "npm:tree-sitter-wasms@0.1.13",
       "npm:web-tree-sitter@0.25.10"
     ]

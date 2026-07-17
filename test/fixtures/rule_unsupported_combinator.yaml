@@ -4,4 +4,4 @@ language: typescript
 severity: warn
 message: unsupported combinator
 rule:
-  kind: call_expression
+  sibling: call_expression
