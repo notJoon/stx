@@ -7,7 +7,6 @@ import {
   fixFile,
   FixTemplateError,
   type Patch,
-  selectFixes,
   type Suggestion,
 } from "../src/fix.ts";
 import { findRuleMatches, loadRuleText } from "../src/rule.ts";
@@ -383,9 +382,6 @@ Deno.test("safe mode excludes unsafe fixes and suggestions are never applied", a
     patches: [patch(2, 3, "C")],
   };
 
-  assertEquals(selectFixes([unsafe, suggestion, safe], "safe"), [safe]);
-  assertEquals(selectFixes([suggestion, unsafe, safe], "unsafe"), [unsafe, safe]);
-
   for (const mode of ["safe", "unsafe"] as const) {
     const suggestionResult = await applyFixes(source, [suggestion], mode);
     assertEquals(text(suggestionResult.bytes), "abc");
@@ -399,11 +395,11 @@ Deno.test("safe mode excludes unsafe fixes and suggestions are never applied", a
 
   const unsafeResult = await applyFixes(
     source,
-    selectFixes([suggestion, unsafe, safe], "unsafe"),
+    [suggestion, unsafe, safe],
     "unsafe",
   );
   assertEquals(text(unsafeResult.bytes), "ABc");
-  assertEquals(unsafeResult.rejected, []);
+  assertEquals(unsafeResult.rejected.map(({ code }) => code), ["suggestion"]);
 });
 
 Deno.test("fixpoint reparses and recollects ranges from current bytes every pass", async () => {

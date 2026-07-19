@@ -80,13 +80,6 @@ export class FixTemplateError extends Error {
   }
 }
 
-/** Filters suggestions and fixes disallowed by the requested safety mode. */
-export function selectFixes(rewrites: readonly Rewrite[], mode: FixMode): Fix[] {
-  return rewrites.filter((rewrite): rewrite is Fix =>
-    rewrite.kind === "fix" && (mode === "unsafe" || rewrite.safety === "safe")
-  );
-}
-
 /** Expands captures from their original source bytes without indentation changes. */
 export function expandFixTemplate(
   source: SourceFile,

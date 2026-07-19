@@ -2,7 +2,7 @@ import { parse as parseYaml } from "@std/yaml";
 import { RE2 } from "re2-wasm";
 import type { Node } from "web-tree-sitter";
 import type { LanguageId } from "./grammar.ts";
-import { type CaptureValue, type Match, matchNode } from "./matcher.ts";
+import { type CaptureValue, type Match, matchNodeBudgeted } from "./matcher.ts";
 import { type CompiledPattern, compilePattern, scanMetavariables } from "./pattern.ts";
 import { semanticsFor, units } from "./semantics.ts";
 import { SourceFile } from "./source_file.ts";
@@ -62,6 +62,28 @@ export class RuleLoadError extends Error {
   }
 }
 
+export type EvaluationLimits = {
+  maxSteps?: number;
+  timeoutMs?: number;
+};
+
+export class EvaluationLimitError extends Error {
+  readonly reason: "budget" | "timeout";
+
+  constructor(reason: "budget" | "timeout") {
+    super(`rule evaluation ${reason} exceeded`);
+    this.name = "EvaluationLimitError";
+    this.reason = reason;
+  }
+}
+
+const DEFAULT_BASE_STEPS = 1_000_000;
+// ponytail: regex rules re-scan every enclosing node, so total work is roughly
+// nesting-depth x byteLength; 512 covers ~500 nesting levels on a full-file
+// regex and timeoutMs remains the wall-clock backstop.
+const DEFAULT_STEPS_PER_BYTE = 512;
+const DEFAULT_TIMEOUT_MS = 1_000;
+
 export async function loadRule(path: string | URL): Promise<LoadedRule> {
   let text: string;
   try {
@@ -90,21 +112,43 @@ export async function loadRuleText(text: string): Promise<LoadedRule> {
 }
 
 /** Evaluates a compiled rule against every valid candidate node in source order. */
-export function findRuleMatches(rule: LoadedRule, source: SourceFile): Match[] {
+export function findRuleMatches(
+  rule: LoadedRule,
+  source: SourceFile,
+  limits: EvaluationLimits = {},
+): Match[] {
+  validateLimit("maxSteps", limits.maxSteps);
+  validateLimit("timeoutMs", limits.timeoutMs);
   const compiled = rule[COMPILED_RULE];
   const result: Match[] = [];
-  const context: EvalContext = { source, semantics: semanticsFor(rule.language) };
+  const now = () => performance.now();
+  const context: EvalContext = {
+    source,
+    semantics: semanticsFor(rule.language),
+    maxSteps: limits.maxSteps ?? DEFAULT_BASE_STEPS + source.byteLength * DEFAULT_STEPS_PER_BYTE,
+    timeoutMs: limits.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    now,
+    startedAt: now(),
+    steps: 0,
+  };
   const cursor = source.tree.walk();
-  visit();
-  cursor.delete();
+  try {
+    visit();
+  } finally {
+    cursor.delete();
+  }
   return result;
 
   function visit() {
+    consumeStep(context);
     if (cursor.nodeType === "ERROR" || cursor.nodeIsMissing) return;
     const node = cursor.currentNode;
     const captures = evaluate(compiled.rule, node, new Map(), context);
-    if (captures && constraintsPass(compiled.constraints, node, captures, context)) {
-      result.push({ root: source.rangeOf(node), captures });
+    checkTimeout(context);
+    if (captures) {
+      const passed = constraintsPass(compiled.constraints, node, captures, context);
+      checkTimeout(context);
+      if (passed) result.push({ root: source.rangeOf(node), captures });
     }
     if (cursor.gotoFirstChild()) {
       do visit(); while (cursor.gotoNextSibling());
@@ -394,15 +438,25 @@ function evaluate(
   captures: ReadonlyMap<string, CaptureValue>,
   context: EvalContext,
 ): Map<string, CaptureValue> | undefined {
+  consumeStep(context);
   switch (expression.type) {
     case "pattern":
-      return matchNode(expression.pattern, node, context.source, captures)?.captures;
+      return matchNodeBudgeted(
+        expression.pattern,
+        node,
+        context.source,
+        captures,
+        (cost) => consumeStep(context, cost),
+      )?.captures;
     case "kind":
       return node.type === expression.kind ? new Map(captures) : undefined;
-    case "regex":
-      return expression.regex.test(context.source.sourceText(context.source.rangeOf(node)))
+    case "regex": {
+      const range = context.source.rangeOf(node);
+      consumeStep(context, range.end - range.start);
+      return expression.regex.test(context.source.sourceText(range))
         ? new Map(captures)
         : undefined;
+    }
     case "all": {
       let current = new Map(captures);
       for (const child of expression.children) {
@@ -442,6 +496,7 @@ function* relatedNodes(
 ): Generator<Node> {
   if (relation === "inside") {
     for (let current = node.parent; current; current = current.parent) {
+      consumeStep(context);
       yield current;
       if (stopBy === "neighbor" || isBoundary(current, stopBy)) return;
     }
@@ -450,6 +505,7 @@ function* relatedNodes(
   if (relation === "has") {
     const visit = function* (parent: Node): Generator<Node> {
       for (const { node: child } of units(parent, context.semantics)) {
+        consumeStep(context);
         if (context.source.isInsideParseProblem(child)) continue;
         yield child;
         if (stopBy !== "neighbor" && !isBoundary(child, stopBy)) yield* visit(child);
@@ -468,7 +524,10 @@ function* relatedNodes(
     ? siblings.slice(0, index).reverse()
     : siblings.slice(index + 1);
   for (const sibling of candidates) {
-    if (!context.source.isInsideParseProblem(sibling)) yield sibling;
+    consumeStep(context);
+    if (!context.source.isInsideParseProblem(sibling)) {
+      yield sibling;
+    }
     if (stopBy === "neighbor" || isBoundary(sibling, stopBy)) return;
   }
 }
@@ -712,7 +771,30 @@ function errorMessage(error: unknown): string {
 type EvalContext = {
   source: SourceFile;
   semantics: ReturnType<typeof semanticsFor>;
+  maxSteps: number;
+  timeoutMs: number;
+  now: () => number;
+  startedAt: number;
+  steps: number;
 };
+
+function consumeStep(context: EvalContext, cost = 1) {
+  context.steps += Math.max(1, cost);
+  if (context.steps > context.maxSteps) throw new EvaluationLimitError("budget");
+  checkTimeout(context);
+}
+
+function checkTimeout(context: EvalContext) {
+  if (context.now() - context.startedAt >= context.timeoutMs) {
+    throw new EvaluationLimitError("timeout");
+  }
+}
+
+function validateLimit(name: keyof EvaluationLimits, value: number | undefined) {
+  if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
+    throw new RangeError(`${name} must be a finite positive number`);
+  }
+}
 
 const COMBINATORS = new Set([
   "pattern",

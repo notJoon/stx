@@ -53,10 +53,22 @@ export function matchNode(
   target: SourceFile,
   initial: ReadonlyMap<string, CaptureValue> = new Map(),
 ): Match | undefined {
+  return matchNodeBudgeted(pattern, candidate, target, initial);
+}
+
+/** @internal Matches with rule-evaluation work accounting. */
+export function matchNodeBudgeted(
+  pattern: CompiledPattern,
+  candidate: Node,
+  target: SourceFile,
+  initial: ReadonlyMap<string, CaptureValue>,
+  consume?: (cost?: number) => void,
+): Match | undefined {
   const semantics = semanticsFor(pattern.language);
   const captures = matchPatternNode(pattern.matcherRoot, candidate, new Map(initial), {
     target,
     semantics,
+    consume,
   });
   if (!captures) return undefined;
   return { root: target.rangeOf(candidate), captures };
@@ -68,6 +80,7 @@ function matchPatternNode(
   bindings: Bindings,
   context: MatchContext,
 ): Bindings | undefined {
+  context.consume?.();
   const tUnwrapped = unwrapTransparent(t, context);
   if (tUnwrapped.id !== t.id) return matchPatternNode(p, tUnwrapped, bindings, context);
 
@@ -80,8 +93,9 @@ function matchPatternNode(
 
   if (p.type !== t.type) return undefined;
   if (p.leafText !== undefined) {
-    return p.leafText === sourceText(context.target, t) ? bindings : undefined;
+    return p.leafText === sourceText(t, context) ? bindings : undefined;
   }
+  context.consume?.(t.childCount);
   return matchSeq(p, units(t, context.semantics), bindings, t, context);
 }
 
@@ -181,6 +195,7 @@ function bindVariadic(
   if (!meta?.variadic) return undefined;
   if (meta.name === undefined) return bindings;
 
+  context.consume?.(s - i);
   const nodes = ts.slice(i, s).map((item) => item.node);
   const span = nodes.length === 0 ? emptySpan(ts, i, s, parent, context.target) : {
     start: context.target.rangeOf(nodes[0]).start,
@@ -231,7 +246,7 @@ function bindValue(
   context: MatchContext,
 ): Bindings | undefined {
   const existing = bindings.get(name);
-  if (existing && captureText(existing, context.target) !== captureText(value, context.target)) {
+  if (existing && captureText(existing, context) !== captureText(value, context)) {
     return undefined;
   }
   if (!existing) bindings.set(name, value);
@@ -240,19 +255,24 @@ function bindValue(
 
 function unwrapTransparent(node: Node, context: MatchContext): Node {
   if (!context.semantics.transparent_nodes.has(node.type)) return node;
+  context.consume?.(node.childCount);
   const inner = units(node, context.semantics);
   return inner.length === 1 ? inner[0].node : node;
 }
 
-function sourceText(source: SourceFile, node: Node): string {
-  return source.text.slice(node.startIndex, node.endIndex);
+function sourceText(node: Node, context: MatchContext): string {
+  context.consume?.(node.endIndex - node.startIndex);
+  return context.target.text.slice(node.startIndex, node.endIndex);
 }
 
-function captureText(value: CaptureValue, source: SourceFile): string {
-  return source.sourceText(value.kind === "single" ? source.rangeOf(value.node) : value.span);
+function captureText(value: CaptureValue, context: MatchContext): string {
+  const range = value.kind === "single" ? context.target.rangeOf(value.node) : value.span;
+  context.consume?.(range.end - range.start);
+  return context.target.sourceText(range);
 }
 
 type MatchContext = {
   target: SourceFile;
   semantics: ReturnType<typeof semanticsFor>;
+  consume?: (cost?: number) => void;
 };

@@ -1,5 +1,12 @@
 import { findMatches } from "../src/matcher.ts";
-import { findRuleMatches, loadRule, loadRuleText, RuleLoadError } from "../src/rule.ts";
+import * as ruleApi from "../src/rule.ts";
+import {
+  EvaluationLimitError,
+  findRuleMatches,
+  loadRule,
+  loadRuleText,
+  RuleLoadError,
+} from "../src/rule.ts";
 import { SourceFile } from "../src/source_file.ts";
 
 function assertEquals(actual: unknown, expected: unknown) {
@@ -74,6 +81,137 @@ Deno.test("loads a YAML pattern rule and matches a real TypeScript file", async 
       { range: { start: 86, end: 94 }, text: '"second"' },
     ],
   );
+});
+
+Deno.test("rule API does not expose mutable test seams", () => {
+  assertEquals("internals" in ruleApi, false);
+});
+
+Deno.test("rule evaluation enforces step and wall-clock limits", async () => {
+  const source = await SourceFile.parse("typescript", "a; b;");
+  const rule = await loadRuleText(yaml("  kind: identifier\n"));
+
+  for (const limits of [{ maxSteps: 1 }, { timeoutMs: Number.MIN_VALUE }]) {
+    try {
+      findRuleMatches(rule, source, limits);
+    } catch (error) {
+      if (error instanceof EvaluationLimitError) continue;
+      throw error;
+    }
+    throw new Error("expected EvaluationLimitError");
+  }
+});
+
+Deno.test("timeout is re-checked after the final expensive evaluation", async () => {
+  const source = await SourceFile.parse("typescript", "let a = 1");
+  const rule = await loadRuleText(yaml("  regex: z"));
+  const finalNode = source.tree.rootNode.descendantsOfType("number")[0];
+  if (!finalNode) throw new Error("missing final number node");
+  const finalRange = source.rangeOf(finalNode);
+  const sourceText = source.sourceText.bind(source);
+  const previousNow = Object.getOwnPropertyDescriptor(performance, "now");
+  let expired = false;
+  Object.defineProperty(performance, "now", {
+    configurable: true,
+    value: () => expired ? 1 : 0,
+  });
+  source.sourceText = (range) => {
+    const text = sourceText(range);
+    if (range.start === finalRange.start && range.end === finalRange.end) expired = true;
+    return text;
+  };
+  try {
+    findRuleMatches(rule, source, { timeoutMs: 1 });
+    throw new Error("expected EvaluationLimitError");
+  } catch (error) {
+    assertEquals(expired, true);
+    if (!(error instanceof EvaluationLimitError) || error.reason !== "timeout") throw error;
+  } finally {
+    if (previousNow) Object.defineProperty(performance, "now", previousNow);
+    else Reflect.deleteProperty(performance, "now");
+  }
+});
+
+Deno.test("step budget charges regex source bytes", async () => {
+  const source = await SourceFile.parse("typescript", "x".repeat(1_000));
+  const rule = await loadRuleText(yaml("  regex: x"));
+
+  try {
+    findRuleMatches(rule, source, { maxSteps: 100 });
+  } catch (error) {
+    if (error instanceof EvaluationLimitError && error.reason === "budget") return;
+    throw error;
+  }
+  throw new Error("expected regex source work to exhaust the step budget");
+});
+
+Deno.test("step budget charges matcher traversal", async () => {
+  const source = await SourceFile.parse("typescript", "foo(a, b, c);\n");
+  const rule = await loadRuleText(yaml("  pattern: foo($A, $B, $C)"));
+
+  try {
+    findRuleMatches(rule, source, { maxSteps: 30 });
+  } catch (error) {
+    if (error instanceof EvaluationLimitError && error.reason === "budget") return;
+    throw error;
+  }
+  throw new Error("expected matcher work to exhaust the step budget");
+});
+
+Deno.test("step budget charges variadic capture copies", async () => {
+  const args = Array.from({ length: 200 }, (_, index) => `a${index}`).join(", ");
+  const source = await SourceFile.parse("typescript", `foo(${args});\n`);
+  const rule = await loadRuleText(yaml("  pattern: foo($$$ARGS)"));
+
+  // This run needs ~1829 steps with the ~200-unit variadic copy charge and
+  // ~200 fewer without it, so this budget only trips when the copy is billed.
+  try {
+    findRuleMatches(rule, source, { maxSteps: 1750 });
+  } catch (error) {
+    if (error instanceof EvaluationLimitError && error.reason === "budget") return;
+    throw error;
+  }
+  throw new Error("expected variadic capture work to exhaust the step budget");
+});
+
+Deno.test("default budget accepts a linear regex scan over one megabyte", async () => {
+  const source = await SourceFile.parse("typescript", "x".repeat(1_100_000));
+  const rule = await loadRuleText(yaml("  regex: ^x+$"));
+  assertEquals(findRuleMatches(rule, source).length, 3);
+});
+
+Deno.test("default budget accepts a deeply nested large input", async () => {
+  const source = await SourceFile.parse(
+    "typescript",
+    "(".repeat(8) + "x".repeat(1_100_000) + ")".repeat(8) + ";",
+  );
+  const rule = await loadRuleText(yaml("  regex: x"));
+  assertEquals(findRuleMatches(rule, source).length, 11);
+});
+
+Deno.test("evaluation limits must be finite positive numbers", async () => {
+  const source = await SourceFile.parse("typescript", "x");
+  const rule = await loadRuleText(yaml("  kind: identifier"));
+  for (
+    const limits of [
+      { maxSteps: NaN },
+      { maxSteps: Infinity },
+      { maxSteps: 0 },
+      { maxSteps: -1 },
+      { timeoutMs: NaN },
+      { timeoutMs: Infinity },
+      { timeoutMs: 0 },
+      { timeoutMs: -1 },
+    ]
+  ) {
+    try {
+      findRuleMatches(rule, source, limits);
+    } catch (error) {
+      if (error instanceof RangeError) continue;
+      throw error;
+    }
+    throw new Error(`expected invalid limits to be rejected: ${JSON.stringify(limits)}`);
+  }
 });
 
 Deno.test("reports UTF-8 byte ranges through the YAML smoke path", async () => {

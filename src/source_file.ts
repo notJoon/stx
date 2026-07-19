@@ -59,6 +59,10 @@ export class SourceFile {
     return this.#bytes.slice();
   }
 
+  get byteLength(): number {
+    return this.#diskBytes.length;
+  }
+
   rangeOf(node: Node): ByteRange {
     return this.externalRange({
       start: this.byteIndex(node.startIndex),
