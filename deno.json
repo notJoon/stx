@@ -1,7 +1,7 @@
 {
   "tasks": {
     "check": "deno check src test",
-    "test": "deno test --allow-read",
+    "test": "deno test --allow-read --allow-write --allow-run=deno",
     "bench": "deno run -A bench/bench.ts"
   },
   "exclude": ["bench/corpora"],
@@ -9,7 +9,11 @@
     "lineWidth": 100
   },
   "imports": {
+    "@optique/core": "jsr:@optique/core@1.1.1",
     "@std/yaml": "jsr:@std/yaml@1.0.8",
+    "ajv": "npm:ajv@6.12.6",
+    "ajv-draft-04": "npm:ajv@6.12.6/lib/refs/json-schema-draft-04.json",
+    "fast-xml-parser": "npm:fast-xml-parser@5.2.5",
     "re2-wasm": "npm:re2-wasm@1.0.2",
     "web-tree-sitter": "npm:web-tree-sitter@0.25.10",
     "tree-sitter-wasms/package.json": "npm:tree-sitter-wasms@0.1.13/package.json"
